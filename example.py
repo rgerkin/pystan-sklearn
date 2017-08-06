@@ -1,8 +1,7 @@
 import numpy as np
 from scipy.stats import norm
-from sklearn.grid_search import GridSearchCV
-from sklearn.cross_validation import ShuffleSplit
-from __init__ import StanEstimator
+from sklearn.model_selection import ShuffleSplit,GridSearchCV
+from pystan_sklearn import StanEstimator
 
 #############################################################
 # All of this from the eight schools example.  
@@ -20,7 +19,7 @@ schools_code = """
     transformed parameters {
         real theta[J];
         for (j in 1:J)
-        theta[j] <- mu + tau * eta[j];
+        theta[j] = mu + tau * eta[j];
     }
     model {
         eta ~ normal(0, 1);
@@ -51,16 +50,17 @@ class EightSchoolsEstimator(StanEstimator):
     # This tells the sklearn estimator how to make a prediction for one sample.  
     # This is based on the prediction for the mean theta above.   
     def predict_(self,X,j):
-        print(X,j)
         theta_j = self.mu + self.tau * self.eta[j];
-        return theta_j
+        return (theta_j,self.sigma[j])
     
     # Implement a score_ method for the estimator.  
     # This tells the sklearn estimator how to score one observed sample against
     # the prediction from the model.  
     # It is based on the fitted values of theta and sigma.     
     def score_(self,prediction,y):
-        likelihoods = norm.pdf(y,prediction,self.sigma)
+        likelihoods = np.zeros(len(y))
+        for j,(theta_j,sigma_j) in enumerate(prediction):
+           likelihoods[j] = norm.pdf(y[j],theta_j,sigma_j)
         return np.log(likelihoods).sum()
     
 # Initialize StanEstimator instance.  
@@ -75,15 +75,7 @@ search_data = {'mu':[0.3,1.0,3.0]}
 data = estimator.make_data(search_data=search_data) 
 # Set the data (set estimator attributes).  
 estimator.set_data(data) 
-
-# Fraction of data held out for testing.  
-test_size = 0.1 
-# A cross-validation class from sklearn.  
-# Use the sample size variable from the Stan code here (e.g. "J").  
-cv = ShuffleSplit(data['J'], test_size=test_size) 
-# A grid search class over parameters from sklearn.
-grid = GridSearchCV(estimator, search_data, cv=cv)   
-    
+  
 # Set the y data.  
 # Use the observed effect from the Stan code here (e.g. "y").  
 y = data['y']
@@ -91,6 +83,14 @@ y = data['y']
 # In this example there is no X data so we just use an array of ones.   
 X = np.ones((len(y),1))
 #vstack((data['subject_ids'],data['test_ids'])).transpose()
+
+# Fraction of data held out for testing.  
+test_size = 2.0/len(y)
+# A cross-validation class from sklearn.  
+# Use the sample size variable from the Stan code here (e.g. "J").  
+cv = ShuffleSplit(n_splits=10, test_size=test_size) 
+# A grid search class over parameters from sklearn.
+grid = GridSearchCV(estimator, search_data, cv=cv) 
 
 # Fit the model over the parameter grid.  
 grid.fit(X,y)
